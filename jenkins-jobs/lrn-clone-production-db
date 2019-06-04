@@ -1,0 +1,131 @@
+#!/bin/bash
+set -e
+
+# ----------------------------------------------------------------------------------------------------
+
+# process env variables
+
+DB_HOST=127.0.0.1
+DB_NAME=employees
+DB_BACKUP_USER_NAME=backup-user
+DB_BACKUP_USER_PWD=backup
+MYSQL_VERSION=5.7
+DUMP_FILE=employees-db.sql
+
+DB_CONTAINER_NAME=lrn-clone-db-container
+DB_CONTAINER_USER=root
+DB_CONTAINER_PWD=root-pwd
+
+MYSQL_CONF_DIR=mysql-conf.d
+MYSQL_CONF_FILE=my-custom.cnf
+
+# ----------------------------------------------------------------------------------------------------
+
+function create_mysql_conf_file() {
+
+	# to allow connections from anywhere sharing this folder with new docker
+    mkdir $MYSQL_CONF_DIR
+	(echo "[mysqld]"; echo "bind-address = 0.0.0.0") >> $MYSQL_CONF_DIR/$MYSQL_CONF_FILE
+    
+	if [ ! -f $MYSQL_CONF_DIR/$MYSQL_CONF_FILE ]; then
+       echo ":: Impossible to create MySQL config file"
+       exit 1
+    fi
+
+}
+
+# ----------------------------------------------------------------------------------------------------
+
+function create_db_container() {
+
+	echo ":: Create custom MySQL conf file"
+    create_mysql_conf_file
+
+	# check if this container already exists
+    if [ "$(docker ps -q -a -f name=$DB_CONTAINER_NAME)" ] 
+    then
+    
+		echo -n ":: Stop container: "
+        docker stop $DB_CONTAINER_NAME 
+
+        echo -n ":: Remove container: "    
+        # -v option not to leave unused volumes on Jenkins node
+        docker rm -v $DB_CONTAINER_NAME
+
+    fi    
+    # a conf file is linked to docker container to allow database connections fron anyhost
+    # by default it is not allowed, 
+    echo -n ":: Start new db container: $DB_CONTAINER_NAME with ID: "    
+	docker run --name=$DB_CONTAINER_NAME \
+    			-d \
+                -e MYSQL_ROOT_PASSWORD=$DB_CONTAINER_PWD \
+                --volume=$WORKSPACE/$MYSQL_CONF_DIR:/etc/mysql/conf.d \
+                mysql:$MYSQL_VERSION
+                                
+	# check container is up
+    if [ "$(docker ps -q -f name=$DB_CONTAINER_NAME)" ] 
+    then    
+    
+		echo ":: Container $DB_CONTAINER_NAME is running"
+        
+	else
+    
+    	echo ":: Impossible to run container $DB_CONTAINER_NAME"
+    	exit 1
+        
+    fi      
+
+}
+
+# ----------------------------------------------------------------------------------------------------
+
+function export_database() {
+
+    
+	# creation sentence because target doesn't have this db
+    echo "CREATE DATABASE IF NOT EXISTS $DB_NAME; USE $DB_NAME;" > $DUMP_FILE        
+    
+    # using backup user to dump database
+    mysqldump \
+      -h $DB_HOST \
+      -u $DB_BACKUP_USER_NAME \
+      -p"$DB_BACKUP_USER_PWD" \
+      --hex-blob \
+      --flush-privileges \
+      --triggers \
+      --routines \
+      --events \
+      --set-gtid-purged=OFF \
+      --default-character-set=utf8mb4 \
+      --databases $DB_NAME \
+	2> /dev/null | sed -e 's/ DEFINER=[^ ]*//g' \
+    >> $DUMP_FILE
+  
+}
+
+# ----------------------------------------------------------------------------------------------------
+
+function import_into_new_container()
+{
+    if [ -f $DUMP_FILE ]; then
+		docker exec -i $DB_CONTAINER_NAME mysql -u$DB_CONTAINER_USER -p$DB_CONTAINER_PWD < $DUMP_FILE
+    else
+       echo ":: File '$DUMP_FILE' does not exist"
+    fi
+}
+
+# #####################################################################################################
+# main
+
+echo ":: Create docker from mysql:$MYSQL_VERSION image"
+create_db_container
+
+echo ":: Database dump into file $DUMP_FILE"
+export_database
+
+echo ":: Load database dump file $DUMP_FILE into new container $$DB_CONTAINER_NAME"
+import_into_new_container
+
+# #####################################################################################################
+# #####################################################################################################
+

@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# ----------------------------------------------------------------------------------------------------
+
+# process env variables
+
+DB_NAME=employees
+DB_CONTAINER_NAME=lrn-clone-db-container
+DB_CONTAINER_USER=root
+DB_CONTAINER_PWD=root-pwd
+
+UPDATE_SCRIPT=update-pay-rise.sh
+RISE_FILE_PREFIX=pay-rise-list-
+LOG_FILE="pay-rise-process-errors-"
+
+EMAIL_CONTENT_FILE="email_content.html"
+
+# ----------------------------------------------------------------------------------------------------
+
+check_database_connection() {
+	
+    if [ "$(docker ps -q -f name=$DB_CONTAINER_NAME)" ] 
+    then    
+    
+    	if ! docker exec -i $DB_CONTAINER_NAME mysql -u$DB_CONTAINER_USER -p$DB_CONTAINER_PWD -e "use $DB_NAME;" 2>/dev/null; then
+			echo ":: Database $DB_NAME not found in container $DB_CONTAINER_NAME"    
+			exit 1
+        else 
+			echo ":: Container $DB_CONTAINER_NAME is running"        
+        fi        
+	else    
+    	echo ":: Docker container $DB_CONTAINER_NAME with MySQL instance is not running"
+    	exit 1        
+    fi 
+}
+
+# ----------------------------------------------------------------------------------------------------
+
+function run_process_database() {
+
+    # remove old log files
+    rm -f *.log
+    
+	# File with rise list which has been uploaded into jenkins workspace
+    RISE_DATE=$(ls "$RISE_FILE_PREFIX"*.csv | grep -Eo '[[:digit:]]{4}-[[:digit:]]{2}-[[:digit:]]{2}')
+
+	echo ":: Effective date for rise $RISE_DATE"
+
+	RISE_FILE="$RISE_FILE_PREFIX$RISE_DATE".csv
+    
+    # including the pay rise date comes in handy 
+    LOG_FILE="$LOG_FILE$RISE_DATE".log
+    
+    # former jenkins task was responsible for starting this mysql docker container
+	echo ":: Running script $UPDATE_SCRIPT with data in file $RISE_FILE and using container $DB_CONTAINER_NAME" 
+	bash $UPDATE_SCRIPT \
+    		"$RISE_DATE" \
+    		"$RISE_FILE" \
+			"docker exec -i $DB_CONTAINER_NAME mysql -u$DB_CONTAINER_USER -p$DB_CONTAINER_PWD -D $DB_NAME \
+			2>> $LOG_FILE"           
+
+	# removing all warning lines wich come out because of using password in mysql call
+	sed -i '/Warning/d' $LOG_FILE
+}
+
+# ----------------------------------------------------------------------------------------------------
+
+function customised_email() {
+
+	# according to the sql process result, a custom email is built and sent automatically
+    # keep in mind, sql errors don't result in a jenkins task failure, in that case jenkins finished 
+    # successfully, but those errors are reported by mail
+    if [ -s $LOG_FILE ]
+    then
+      # if log_file is not empty, there are database errors, although process finished successfully
+      echo ":: Detected some errors updating clone database"
+      
+      echo "<p> Some errors were found updating salaries on <b>$DB_NAME</b> (container <b>$DB_CONTAINER_NAME</b>), using the provided file:</p> \
+      	<b>$RISE_FILE</b> \
+      	<br/> \
+        <p>Please take a look at the atached file.</p>" > $EMAIL_CONTENT_FILE
+
+            
+    else
+      # remove file when there were only warnings
+      rm -f $LOG_FILE
+                
+      echo "<p> Salaries were updated correctly on <b>$DB_NAME</b> database (container <b>$DB_CONTAINER_NAME</b>), using the provided file: </p>\
+      	<b>$RISE_FILE</b> \
+      	<br/>" > $EMAIL_CONTENT_FILE
+                  
+    fi    
+
+}
+
+# #####################################################################################################
+# main
+
+# checking docker container is up and database exists
+check_database_connection
+
+# running script to update new salaries
+run_process_database
+
+# customising email with sql process results
+customised_email
+
+# #####################################################################################################
+# #####################################################################################################
