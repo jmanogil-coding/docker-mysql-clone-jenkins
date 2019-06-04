@@ -231,7 +231,7 @@ You will likely need to give reading permissions to both files
 $ sudo chmod a+r *.csv *.sh
 ```
 
-The code you copied into the `command` area will run a simple **Database** script which reads a **csv file** with two columns: employee number and percentage of increase in the payroll. Take a look at the [code](jenkins-jobs/lrn-process-clone-db/update-pay-rise.sh), in particular the SQL instruction:
+The code you copied into the `command` area will run a simple **Database** script which reads a **csv file** with two columns: employee number and percentage of increase in the payroll. Take a look at the [code](move-to-jenkins-server/update-pay-rise.sh), in particular the SQL instruction:
 
 ```
 #!/bin/bash
